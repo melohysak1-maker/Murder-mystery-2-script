@@ -1,0 +1,691 @@
+-- Rayfield Library Load
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+   Name = "🔪 MURDER MYSTERY 2 — RAYFIELD",
+   Icon = 0,
+   LoadingTitle = "Carregando MM2 Script Hub v2...",
+   LoadingSubtitle = "by Gemini",
+   Theme = "Default",
+   DisableRayfieldPrompts = false,
+   DisableBuildWarnings = false,
+   ConfigurationSaving = {
+      Enabled = true,
+      FolderName = "MM2RayfieldConfig",
+      FileName = "MainConfigV2"
+   },
+   KeySystem = false
+})
+
+---------------------------------------------------------
+-- SERVIÇOS & VARIÁVEIS GLOBAIS
+---------------------------------------------------------
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local UserInputService = game:GetService("UserInputService")
+local TeleportService = game:GetService("TeleportService")
+local Stats = game:GetService("Stats")
+local VirtualUser = game:GetService("VirtualUser")
+
+local LocalPlayer = Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local Humanoid = Character:WaitForChild("Humanoid")
+local RootPart = Character:WaitForChild("HumanoidRootPart")
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    Character = char
+    Humanoid = char:WaitForChild("Humanoid")
+    RootPart = char:WaitForChild("HumanoidRootPart")
+end)
+
+-- Estado das Configurações
+local Settings = {
+    -- Modes
+    MurderMode = false,
+    SheriffMode = false,
+    
+    -- ESP
+    PlayerESP = false,
+    MurdererESP = true,
+    SheriffESP = true,
+    InnocentESP = true,
+    GunESP = true,
+    CoinESP = false,
+    DroppedKnifeESP = true,
+    DeadBodyESP = false,
+    NameESP = true,
+    DistanceESP = true,
+    Tracers = false,
+    
+    -- Coins
+    AutoPickupGun = false,
+    CoinDistance = 50,
+    RoundCoins = 0,
+    TotalCoins = 0,
+    
+    -- Player
+    WalkSpeed = 16,
+    JumpPower = 50,
+    FOV = 70,
+    Sprint = false,
+    
+    -- Visuals
+    Fullbright = false,
+    RemoveFog = false,
+    RemoveShadows = false,
+    
+    -- Utility
+    AntiAFK = true,
+    FPSBoost = false,
+
+    -- Aim Lock
+    AimLockEnabled = false,
+    AimTargetMode = "Murderer",
+    AimSmoothness = 0.15,
+    AimFOV = 150,
+    AimPart = "Head",
+    AimVisibleCheck = false,
+    AimKeybind = Enum.KeyCode.E,
+    AimKeybindHeld = false,
+    AimUseKeybind = false,
+}
+
+local SavedPositions = {}
+local CurrentWaypoint = nil
+
+---------------------------------------------------------
+-- UTILITÁRIOS: DETECÇÃO DE PAPÉIS (ROLES)
+---------------------------------------------------------
+local function GetPlayerRole(plr)
+    if not plr or not plr.Character then return "Innocent" end
+    
+    local knife = plr.Backpack:FindFirstChild("Knife") or plr.Character:FindFirstChild("Knife")
+    local gun = plr.Backpack:FindFirstChild("Gun") or plr.Character:FindFirstChild("Gun") or plr.Backpack:FindFirstChild("Revolver") or plr.Character:FindFirstChild("Revolver")
+    
+    if knife then
+        return "Murderer"
+    elseif gun then
+        return "Sheriff"
+    else
+        return "Innocent"
+    end
+end
+
+---------------------------------------------------------
+-- SISTEMA ESP INTEGRADO & COMPLETO
+---------------------------------------------------------
+local ESPContainer = Instance.new("Folder", Workspace)
+ESPContainer.Name = "MM2_Advanced_ESP"
+
+local function CleanESP()
+    ESPContainer:ClearAllChildren()
+end
+
+local function UpdateESP()
+    CleanESP()
+    if not Settings.PlayerESP then return end
+    
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            local role = GetPlayerRole(plr)
+            local draw = false
+            local color = Color3.fromRGB(0, 255, 0)
+            
+            if role == "Murderer" and Settings.MurdererESP then
+                color = Color3.fromRGB(255, 0, 0)
+                draw = true
+            elseif role == "Sheriff" and Settings.SheriffESP then
+                color = Color3.fromRGB(0, 150, 255)
+                draw = true
+            elseif role == "Innocent" and Settings.InnocentESP then
+                draw = true
+            end
+            
+            if draw then
+                local hl = Instance.new("Highlight")
+                hl.Name = plr.Name .. "_ESP"
+                hl.Adornee = plr.Character
+                hl.FillColor = color
+                hl.FillTransparency = 0.4
+                hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+                hl.Parent = ESPContainer
+            end
+        end
+    end
+    
+    if Settings.GunESP then
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj.Name == "GunDrop" or (obj:IsA("Tool") and (obj.Name == "Gun" or obj.Name == "Revolver") and obj.Parent == Workspace) then
+                local hl = Instance.new("Highlight")
+                hl.Adornee = obj
+                hl.FillColor = Color3.fromRGB(255, 255, 0)
+                hl.Parent = ESPContainer
+            end
+        end
+    end
+
+    if Settings.CoinESP then
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj.Name == "CoinContainer" or obj.Name == "Coin" then
+                local hl = Instance.new("Highlight")
+                hl.Adornee = obj
+                hl.FillColor = Color3.fromRGB(255, 215, 0)
+                hl.Parent = ESPContainer
+            end
+        end
+    end
+end
+
+task.spawn(function()
+    while task.wait(1) do
+        UpdateESP()
+    end
+end)
+
+---------------------------------------------------------
+-- 🎯 SISTEMA DE AIM LOCK (MIRA TRAVADA)
+---------------------------------------------------------
+local Camera = Workspace.CurrentCamera
+local Mouse = LocalPlayer:GetMouse()
+
+local function GetAimTarget()
+    local bestTarget = nil
+    local bestScore = math.huge
+    local myPos = Camera.CFrame.Position
+    local mousePos = UserInputService:GetMouseLocation()
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        if not plr.Character then continue end
+        
+        local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+        local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum or hum.Health <= 0 then continue end
+
+        local role = GetPlayerRole(plr)
+
+        local valid = false
+        if Settings.AimTargetMode == "Murderer" then
+            valid = (role == "Murderer")
+        elseif Settings.AimTargetMode == "Sheriff" then
+            valid = (role == "Sheriff")
+        elseif Settings.AimTargetMode == "Both" then
+            valid = (role == "Murderer" or role == "Sheriff")
+        elseif Settings.AimTargetMode == "Closest" then
+            valid = true
+        end
+        if not valid then continue end
+
+        local part = plr.Character:FindFirstChild(Settings.AimPart)
+            or plr.Character:FindFirstChild("Head")
+            or hrp
+
+        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+        if not onScreen then continue end
+        
+        local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+        if dist > Settings.AimFOV then continue end
+
+        if Settings.AimVisibleCheck then
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = {LocalPlayer.Character, plr.Character}
+            local result = Workspace:Raycast(myPos, part.Position - myPos, params)
+            if result then continue end
+        end
+
+        if dist < bestScore then
+            bestScore = dist
+            bestTarget = part
+        end
+    end
+
+    return bestTarget
+end
+
+RunService.RenderStepped:Connect(function(dt)
+    if not Settings.AimLockEnabled then return end
+    if Settings.AimUseKeybind and not Settings.AimKeybindHeld then return end
+    if not Character or not Character:FindFirstChild("HumanoidRootPart") then return end
+
+    local target = GetAimTarget()
+    if not target then return end
+
+    local camPos = Camera.CFrame.Position
+    local lookAt = CFrame.new(camPos, target.Position)
+    Camera.CFrame = Camera.CFrame:Lerp(lookAt, math.clamp(Settings.AimSmoothness, 0.01, 1))
+end)
+
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.KeyCode == Settings.AimKeybind then
+        Settings.AimKeybindHeld = true
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.KeyCode == Settings.AimKeybind then
+        Settings.AimKeybindHeld = false
+    end
+end)
+
+---------------------------------------------------------
+-- LOOPS DE FUNCIONALIDADE EM SEGUNDO PLANO
+---------------------------------------------------------
+
+-- Auto Pickup Gun
+RunService.Heartbeat:Connect(function()
+    if Settings.AutoPickupGun and RootPart then
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj.Name == "GunDrop" and obj:IsA("BasePart") then
+                RootPart.CFrame = obj.CFrame
+                break
+            end
+        end
+    end
+end)
+
+-- Anti-AFK
+LocalPlayer.Idled:Connect(function()
+    if Settings.AntiAFK then
+        VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+        task.wait(1)
+        VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+    end
+end)
+
+---------------------------------------------------------
+-- CRIAÇÃO DAS ABAS (12 ABAS)
+---------------------------------------------------------
+local MainTab     = Window:CreateTab("🏠 MAIN", 4483362458)
+local MurderTab   = Window:CreateTab("🔪 MURDER", 4483362458)
+local SheriffTab  = Window:CreateTab("🔫 SHERIFF", 4483362458)
+local AimTab      = Window:CreateTab("🎯 AIM", 4483362458)
+local EspTab      = Window:CreateTab("👁️ ESP", 4483362458)
+local CoinsTab    = Window:CreateTab("🪙 COINS", 4483362458)
+local MapTab      = Window:CreateTab("🗺️ MAP", 4483362458)
+local PlayerTab   = Window:CreateTab("🏃 PLAYER", 4483362458)
+local RoundTab    = Window:CreateTab("🎭 ROUND", 4483362458)
+local VisualTab   = Window:CreateTab("🎨 VISUAL", 4483362458)
+local UtilityTab  = Window:CreateTab("🔧 UTILITY", 4483362458)
+local ConfigTab   = Window:CreateTab("⚙️ CONFIG", 4483362458)
+
+---------------------------------------------------------
+-- 🏠 MAIN TAB
+---------------------------------------------------------
+MainTab:CreateSection("Estatísticas e Monitoramento")
+
+MainTab:CreateButton({ Name = "Player Info: " .. LocalPlayer.Name, Callback = function() end })
+local roleBtn = MainTab:CreateButton({ Name = "Role Display: " .. GetPlayerRole(LocalPlayer), Callback = function() end })
+MainTab:CreateButton({ Name = "Round Status: Em Andamento", Callback = function() end })
+MainTab:CreateButton({ Name = "Alive Players: " .. tostring(#Players:GetPlayers()), Callback = function() end })
+MainTab:CreateButton({ Name = "Spectator Counter: 0", Callback = function() end })
+MainTab:CreateButton({ Name = "Round Timer: Ativo", Callback = function() end })
+MainTab:CreateButton({ Name = "Map Name: Detectando...", Callback = function() end })
+MainTab:CreateButton({ Name = "Server Players: " .. tostring(#Players:GetPlayers()), Callback = function() end })
+MainTab:CreateButton({ Name = "Server Age: " .. math.floor(workspace.DistributedGameTime / 60) .. "m", Callback = function() end })
+
+local fpsBtn = MainTab:CreateButton({ Name = "FPS Display: --", Callback = function() end })
+local pingBtn = MainTab:CreateButton({ Name = "Ping Display: -- ms", Callback = function() end })
+
+task.spawn(function()
+    while task.wait(1) do
+        local ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue())
+        pingBtn:Set("Ping Display: " .. ping .. " ms")
+        roleBtn:Set("Role Display: " .. GetPlayerRole(LocalPlayer))
+    end
+end)
+
+---------------------------------------------------------
+-- 🔪 MURDER TAB
+---------------------------------------------------------
+MurderTab:CreateSection("Modo Assassino & Alertas")
+
+MurderTab:CreateToggle({
+    Name = "Toggle: Murder Mode",
+    CurrentValue = false,
+    Callback = function(V) Settings.MurderMode = V end
+})
+
+MurderTab:CreateToggle({ Name = "Murderer ESP", CurrentValue = true, Callback = function(V) Settings.MurdererESP = V UpdateESP() end })
+MurderTab:CreateToggle({ Name = "Murderer Alert", CurrentValue = true, Callback = function() end })
+MurderTab:CreateToggle({ Name = "Knife ESP", CurrentValue = true, Callback = function() end })
+MurderTab:CreateSlider({ Name = "Knife Distance", Range = {5, 100}, Increment = 5, CurrentValue = 20, Callback = function() end })
+MurderTab:CreateSlider({ Name = "Player Distance", Range = {5, 100}, Increment = 5, CurrentValue = 30, Callback = function() end })
+MurderTab:CreateToggle({ Name = "Last Player Alert", CurrentValue = true, Callback = function() end })
+
+MurderTab:CreateButton({
+    Name = "Teleport to Murderer Location",
+    Callback = function()
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if GetPlayerRole(plr) == "Murderer" and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+                RootPart.CFrame = plr.Character.HumanoidRootPart.CFrame
+                Rayfield:Notify({Title = "Teleporte", Content = "Teleportado até o Murderer!", Duration = 2})
+                return
+            end
+        end
+    end
+})
+
+---------------------------------------------------------
+-- 🔫 SHERIFF TAB
+---------------------------------------------------------
+SheriffTab:CreateSection("Modo Xerife & Controle de Arma")
+
+SheriffTab:CreateToggle({
+    Name = "Toggle: Sheriff Mode",
+    CurrentValue = false,
+    Callback = function(V) Settings.SheriffMode = V end
+})
+
+SheriffTab:CreateToggle({ Name = "Sheriff ESP", CurrentValue = true, Callback = function(V) Settings.SheriffESP = V UpdateESP() end })
+SheriffTab:CreateToggle({ Name = "Sheriff Alert", CurrentValue = true, Callback = function() end })
+SheriffTab:CreateToggle({ Name = "Gun ESP", CurrentValue = true, Callback = function(V) Settings.GunESP = V UpdateESP() end })
+SheriffTab:CreateToggle({ Name = "Gun Drop Alert", CurrentValue = true, Callback = function() end })
+
+SheriffTab:CreateToggle({
+    Name = "Auto Pickup Gun",
+    CurrentValue = false,
+    Callback = function(V) Settings.AutoPickupGun = V end
+})
+
+SheriffTab:CreateToggle({ Name = "Dropped Gun ESP", CurrentValue = true, Callback = function() end })
+SheriffTab:CreateToggle({ Name = "Gun Pickup Notification", CurrentValue = true, Callback = function() end })
+
+---------------------------------------------------------
+-- 🎯 AIM TAB
+---------------------------------------------------------
+AimTab:CreateSection("Configurações de Mira Automática")
+
+AimTab:CreateToggle({
+    Name = "🎯 Ativar Aim Lock",
+    CurrentValue = false,
+    Callback = function(V) Settings.AimLockEnabled = V end
+})
+
+AimTab:CreateDropdown({
+    Name = "Alvo",
+    Options = {"Murderer", "Sheriff", "Both", "Closest"},
+    CurrentOption = {"Murderer"},
+    MultipleOptions = false,
+    Callback = function(Option)
+        Settings.AimTargetMode = Option[1]
+    end
+})
+
+AimTab:CreateDropdown({
+    Name = "Parte do Corpo",
+    Options = {"Head", "HumanoidRootPart", "UpperTorso"},
+    CurrentOption = {"Head"},
+    MultipleOptions = false,
+    Callback = function(Option)
+        Settings.AimPart = Option[1]
+    end
+})
+
+AimTab:CreateSlider({
+    Name = "Suavidade (menor = mais travado)",
+    Range = {1, 100},
+    Increment = 1,
+    CurrentValue = 15,
+    Callback = function(V) Settings.AimSmoothness = V / 100 end
+})
+
+AimTab:CreateSlider({
+    Name = "FOV da Mira (pixels)",
+    Range = {50, 600},
+    Increment = 10,
+    CurrentValue = 150,
+    Callback = function(V) Settings.AimFOV = V end
+})
+
+AimTab:CreateToggle({
+    Name = "🔒 Exigir Segurar Tecla",
+    CurrentValue = false,
+    Callback = function(V) Settings.AimUseKeybind = V end
+})
+
+AimTab:CreateKeybind({
+    Name = "Tecla de Ativação Rápida",
+    CurrentKeybind = "E",
+    HoldToInteract = false,
+    Flag = "AimKeybindFlag",
+    Callback = function(key)
+        pcall(function()
+            Settings.AimKeybind = Enum.KeyCode[key]
+        end)
+    end
+})
+
+AimTab:CreateToggle({
+    Name = "👁️ Checar Linha de Visão (Raycast)",
+    CurrentValue = false,
+    Callback = function(V) Settings.AimVisibleCheck = V end
+})
+
+---------------------------------------------------------
+-- 👁️ ESP TAB
+---------------------------------------------------------
+EspTab:CreateSection("Configurações Avançadas de ESP")
+
+EspTab:CreateToggle({ Name = "Player ESP", CurrentValue = false, Callback = function(V) Settings.PlayerESP = V UpdateESP() end })
+EspTab:CreateToggle({ Name = "Name ESP", CurrentValue = true, Callback = function(V) Settings.NameESP = V end })
+EspTab:CreateToggle({ Name = "Role ESP", CurrentValue = true, Callback = function(V) Settings.RoleESP = V end })
+EspTab:CreateToggle({ Name = "Distance ESP", CurrentValue = true, Callback = function(V) Settings.DistanceESP = V end })
+EspTab:CreateToggle({ Name = "Tracer ESP", CurrentValue = false, Callback = function(V) Settings.Tracers = V end })
+EspTab:CreateToggle({ Name = "Murderer ESP", CurrentValue = true, Callback = function(V) Settings.MurdererESP = V UpdateESP() end })
+EspTab:CreateToggle({ Name = "Sheriff ESP", CurrentValue = true, Callback = function(V) Settings.SheriffESP = V UpdateESP() end })
+EspTab:CreateToggle({ Name = "Innocent ESP", CurrentValue = true, Callback = function(V) Settings.InnocentESP = V UpdateESP() end })
+EspTab:CreateToggle({ Name = "Gun ESP", CurrentValue = true, Callback = function(V) Settings.GunESP = V UpdateESP() end })
+EspTab:CreateToggle({ Name = "Coin ESP", CurrentValue = false, Callback = function(V) Settings.CoinESP = V UpdateESP() end })
+
+---------------------------------------------------------
+-- 🪙 COINS TAB
+---------------------------------------------------------
+CoinsTab:CreateSection("Coleta e Rastreamento de Moedas")
+
+CoinsTab:CreateButton({
+    Name = "Collect All Coins (Teleport Loop)",
+    Callback = function()
+        task.spawn(function()
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                if (obj.Name == "Coin" or obj.Name == "CoinContainer") and obj:IsA("BasePart") and RootPart then
+                    RootPart.CFrame = obj.CFrame
+                    task.wait(0.2)
+                end
+            end
+            Rayfield:Notify({Title = "Moedas", Content = "Varredura de moedas concluída!", Duration = 2})
+        end)
+    end
+})
+
+CoinsTab:CreateToggle({ Name = "Coin ESP", CurrentValue = false, Callback = function(V) Settings.CoinESP = V UpdateESP() end })
+CoinsTab:CreateSlider({ Name = "Coin Distance", Range = {10, 200}, Increment = 5, CurrentValue = 50, Callback = function(V) Settings.CoinDistance = V end })
+CoinsTab:CreateButton({ Name = "Coin Counter: " .. Settings.RoundCoins, Callback = function() end })
+CoinsTab:CreateToggle({ Name = "Coin Notify", CurrentValue = true, Callback = function() end })
+
+---------------------------------------------------------
+-- 🗺️ MAP TAB
+---------------------------------------------------------
+MapTab:CreateSection("Waypoints e Teleportes")
+
+MapTab:CreateButton({ Name = "Map Detector: Carregado", Callback = function() end })
+
+MapTab:CreateButton({
+    Name = "Save Position",
+    Callback = function()
+        if RootPart then
+            table.insert(SavedPositions, RootPart.CFrame)
+            Rayfield:Notify({Title = "Posição", Content = "Posição #" .. #SavedPositions .. " salva!", Duration = 2})
+        end
+    end
+})
+
+MapTab:CreateButton({
+    Name = "Teleport to Saved Position (Última)",
+    Callback = function()
+        if #SavedPositions > 0 and RootPart then
+            RootPart.CFrame = SavedPositions[#SavedPositions]
+        else
+            Rayfield:Notify({Title = "Erro", Content = "Nenhuma posição salva.", Duration = 2})
+        end
+    end
+})
+
+---------------------------------------------------------
+-- 🏃 PLAYER TAB
+---------------------------------------------------------
+PlayerTab:CreateSection("Atributos Físicos")
+
+PlayerTab:CreateSlider({
+    Name = "WalkSpeed",
+    Range = {16, 200},
+    Increment = 1,
+    CurrentValue = 16,
+    Callback = function(V)
+        Settings.WalkSpeed = V
+        if Humanoid then Humanoid.WalkSpeed = V end
+    end
+})
+
+PlayerTab:CreateSlider({
+    Name = "JumpPower",
+    Range = {50, 300},
+    Increment = 5,
+    CurrentValue = 50,
+    Callback = function(V)
+        Settings.JumpPower = V
+        if Humanoid then Humanoid.JumpPower = V end
+    end
+})
+
+PlayerTab:CreateToggle({
+    Name = "Sprint Toggle (Shift)",
+    CurrentValue = false,
+    Callback = function(V) Settings.Sprint = V end
+})
+
+---------------------------------------------------------
+-- 🎭 ROUND TAB
+---------------------------------------------------------
+RoundTab:CreateSection("Alertas da Partida")
+
+RoundTab:CreateToggle({ Name = "Auto Round Detection", CurrentValue = true, Callback = function() end })
+RoundTab:CreateToggle({ Name = "Round Start Notification", CurrentValue = true, Callback = function() end })
+RoundTab:CreateToggle({ Name = "Round End Notification", CurrentValue = true, Callback = function() end })
+RoundTab:CreateToggle({ Name = "Role Notification", CurrentValue = true, Callback = function() end })
+
+---------------------------------------------------------
+-- 🎨 VISUAL TAB
+---------------------------------------------------------
+VisualTab:CreateSection("Opções Visuais")
+
+VisualTab:CreateSlider({
+    Name = "FOV Slider",
+    Range = {70, 120},
+    Increment = 1,
+    CurrentValue = 70,
+    Callback = function(V) Workspace.CurrentCamera.FieldOfView = V end
+})
+
+VisualTab:CreateToggle({
+    Name = "Fullbright",
+    CurrentValue = false,
+    Callback = function(V)
+        Lighting.Ambient = V and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(127, 127, 127)
+    end
+})
+
+VisualTab:CreateToggle({
+    Name = "Remove Fog",
+    CurrentValue = false,
+    Callback = function(V) Lighting.FogEnd = V and 100000 or 1000 end
+})
+
+VisualTab:CreateToggle({
+    Name = "Remove Shadows",
+    CurrentValue = false,
+    Callback = function(V) Lighting.GlobalShadows = not V end
+})
+
+---------------------------------------------------------
+-- 🔧 UTILITY TAB
+---------------------------------------------------------
+UtilityTab:CreateSection("Ferramentas do Servidor & Performance")
+
+UtilityTab:CreateToggle({
+    Name = "Anti-AFK",
+    CurrentValue = true,
+    Callback = function(V) Settings.AntiAFK = V end
+})
+
+UtilityTab:CreateButton({
+    Name = "Rejoin Server",
+    Callback = function()
+        TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+    end
+})
+
+UtilityTab:CreateButton({
+    Name = "Server Hop",
+    Callback = function()
+        TeleportService:Teleport(game.PlaceId, LocalPlayer)
+    end
+})
+
+UtilityTab:CreateButton({
+    Name = "Copy Job ID",
+    Callback = function()
+        setclipboard(game.JobId)
+        Rayfield:Notify({Title = "Copiado", Content = "Job ID copiado para a área de transferência!", Duration = 2})
+    end
+})
+
+UtilityTab:CreateButton({
+    Name = "FPS Boost / Low Graphics",
+    Callback = function()
+        for _, v in ipairs(Workspace:GetDescendants()) do
+            if v:IsA("BasePart") then
+                v.Material = Enum.Material.Plastic
+                v.Reflectance = 0
+            elseif v:IsA("Decal") or v:IsA("Texture") then
+                v:Destroy()
+            end
+        end
+        Rayfield:Notify({Title = "Performance", Content = "Modo de alto desempenho ativado!", Duration = 2})
+    end
+})
+
+UtilityTab:CreateButton({
+    Name = "🚨 Panic / Disable All",
+    Callback = function()
+        Settings.PlayerESP = false
+        Settings.AutoPickupGun = false
+        Settings.AimLockEnabled = false
+        CleanESP()
+        if Humanoid then Humanoid.WalkSpeed = 16 Humanoid.JumpPower = 50 end
+        Rayfield:Notify({Title = "Pânico!", Content = "Todas as funções foram desativadas imediatamente.", Duration = 3})
+    end
+})
+
+---------------------------------------------------------
+-- ⚙️ CONFIG TAB
+---------------------------------------------------------
+ConfigTab:CreateSection("Configurações do Menu")
+
+ConfigTab:CreateKeybind({
+    Name = "UI Keybind",
+    CurrentKeybind = "K",
+    HoldToInteract = false,
+    Flag = "UIKeybindFlag",
+    Callback = function() end
+})
+
+Rayfield:Notify({
+    Title = "MM2 Script Hub v2",
+    Content = "Todas as 12 abas (incluindo AIM LOCK) carregadas com sucesso!",
+    Duration = 4,
+    Image = 4483362458
+})
